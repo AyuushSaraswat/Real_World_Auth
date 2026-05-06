@@ -1,9 +1,15 @@
 const jwt = require("jsonwebtoken");
 const UserModel = require("../models/user.model");
 const bcrypt = require("bcrypt");
+const sendMail = require("../utils/sendMail");
+
+
+
+// ================= REGISTER =================
 
 const registerController = async (req, res) => {
   try {
+
     const { userName, email, password } = req.body;
 
     // validate input
@@ -34,12 +40,16 @@ const registerController = async (req, res) => {
       password: hashedPassword,
     });
 
-    // success response
+    // response
     return res.status(201).json({
       success: true,
       message: "User registered successfully",
     });
+
   } catch (error) {
+
+    console.log(error);
+
     return res.status(500).json({
       success: false,
       message: "Internal Server Error",
@@ -47,8 +57,13 @@ const registerController = async (req, res) => {
   }
 };
 
+
+
+// ================= LOGIN =================
+
 const loginController = async (req, res) => {
   try {
+
     const { email, password } = req.body;
 
     // validate input
@@ -61,6 +76,7 @@ const loginController = async (req, res) => {
 
     // check user
     const user = await UserModel.findOne({ email });
+
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -69,43 +85,57 @@ const loginController = async (req, res) => {
     }
 
     // compare password
-    const matchPass = await bcrypt.compare(password, user.password);
+    const matchPass = await bcrypt.compare(
+      password,
+      user.password
+    );
 
     if (!matchPass) {
       return res.status(401).json({
         success: false,
-        message: "Password does not match! Try again",
+        message: "Password does not match",
       });
     }
 
-    // payload
+    // jwt payload
     const payload = {
       id: user._id,
       email: user.email,
       role: user.role,
     };
 
-    // generate tokens
-    const accessToken = jwt.sign(payload, process.env.ACCESS_SECRET, {
-      expiresIn: process.env.ACCESS_EXPIRY,
-    });
+    // generate access token
+    const accessToken = jwt.sign(
+      payload,
+      process.env.ACCESS_SECRET,
+      {
+        expiresIn: process.env.ACCESS_EXPIRY,
+      }
+    );
 
-    const refreshToken = jwt.sign(payload, process.env.REFRESH_SECRET, {
-      expiresIn: process.env.REFRESH_EXPIRY,
-    });
+    // generate refresh token
+    const refreshToken = jwt.sign(
+      payload,
+      process.env.REFRESH_SECRET,
+      {
+        expiresIn: process.env.REFRESH_EXPIRY,
+      }
+    );
 
-    // store refresh token in DB
+    // save refresh token in DB
     user.refreshTokens.push({
       token: refreshToken,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      expiresAt: new Date(
+        Date.now() + 7 * 24 * 60 * 60 * 1000
+      ),
     });
 
     await user.save();
 
-    // set cookie
+    // send cookie
     res.cookie("refreshToken", refreshToken, {
       httpOnly: true,
-      secure: false, // set true in production (HTTPS)
+      secure: false,
       sameSite: "Strict",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
@@ -116,7 +146,11 @@ const loginController = async (req, res) => {
       message: "Login successful",
       accessToken,
     });
+
   } catch (error) {
+
+    console.log(error);
+
     return res.status(500).json({
       success: false,
       message: "Internal Server Error",
@@ -124,20 +158,28 @@ const loginController = async (req, res) => {
   }
 };
 
+
+
+// ================= REFRESH ACCESS TOKEN =================
+
 const refreshAccessTokenController = async (req, res) => {
   try {
-    // old refresh token from cookie
+
+    // get old refresh token
     const oldRefreshToken = req.cookies.refreshToken;
 
     if (!oldRefreshToken) {
       return res.status(401).json({
         success: false,
-        message: "Please login ",
+        message: "Please login",
       });
     }
 
-    // verify old refresh token
-    const decoded = jwt.verify(oldRefreshToken, process.env.REFRESH_SECRET);
+    // verify refresh token
+    const decoded = jwt.verify(
+      oldRefreshToken,
+      process.env.REFRESH_SECRET
+    );
 
     // find user
     const user = await UserModel.findById(decoded.id);
@@ -151,7 +193,7 @@ const refreshAccessTokenController = async (req, res) => {
 
     // check token exists in DB
     const tokenExists = user.refreshTokens.find(
-      (item) => item.token === oldRefreshToken,
+      (item) => item.token === oldRefreshToken
     );
 
     if (!tokenExists) {
@@ -161,9 +203,9 @@ const refreshAccessTokenController = async (req, res) => {
       });
     }
 
-    // REMOVE old refresh token (rotation)
+    // remove old refresh token
     user.refreshTokens = user.refreshTokens.filter(
-      (item) => item.token !== oldRefreshToken,
+      (item) => item.token !== oldRefreshToken
     );
 
     // payload
@@ -173,142 +215,51 @@ const refreshAccessTokenController = async (req, res) => {
       role: user.role,
     };
 
-    // generate new access token
-    const accessToken = jwt.sign(payload, process.env.ACCESS_SECRET, {
-      expiresIn: process.env.ACCESS_EXPIRY,
-    });
+    // new access token
+    const accessToken = jwt.sign(
+      payload,
+      process.env.ACCESS_SECRET,
+      {
+        expiresIn: process.env.ACCESS_EXPIRY,
+      }
+    );
 
-    // generate new refresh token
-    const newRefreshToken = jwt.sign(payload, process.env.REFRESH_SECRET, {
-      expiresIn: process.env.REFRESH_EXPIRY,
-    });
+    // new refresh token
+    const newRefreshToken = jwt.sign(
+      payload,
+      process.env.REFRESH_SECRET,
+      {
+        expiresIn: process.env.REFRESH_EXPIRY,
+      }
+    );
 
-    // store new refresh token
+    // save new refresh token
     user.refreshTokens.push({
       token: newRefreshToken,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      expiresAt: new Date(
+        Date.now() + 7 * 24 * 60 * 60 * 1000
+      ),
     });
 
-    // save updated user
     await user.save();
 
-    // send new refresh token cookie
+    // send cookie
     res.cookie("refreshToken", newRefreshToken, {
       httpOnly: true,
-      secure: false, // true in production
+      secure: false,
       sameSite: "Strict",
       maxAge: 7 * 24 * 60 * 60 * 1000,
     });
 
-    // send new access token
+    // response
     return res.status(200).json({
       success: true,
       message: "Tokens refreshed successfully",
       accessToken,
     });
+
   } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-    });
-  }
-};
 
-const logoutController = async (req, res) => {
-  try {
-    // get refresh token from cookie
-    const refreshToken = req.cookies.refreshToken;
-
-    if (!refreshToken) {
-      return res.status(400).json({
-        success: false,
-        message: "Refresh token not found",
-      });
-    }
-
-    // find user containing this refresh token
-    const user = await UserModel.findOne({
-      "refreshTokens.token": refreshToken,
-    });
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    // remove current refresh token
-    user.refreshTokens = user.refreshTokens.filter(
-      (item) => item.token !== refreshToken,
-    );
-
-    // save updated user
-    await user.save();
-
-    // clear cookie
-    res.clearCookie("refreshToken", {
-      httpOnly: true,
-      secure: false, // true in production
-      sameSite: "Strict",
-    });
-
-    // response
-    return res.status(200).json({
-      success: true,
-      message: "Logout successful",
-    });
-  } catch (error) {
-    return res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-    });
-  }
-};
-
-const logoutAllController = async (req, res) => {
-  try {
-    // get current refresh token from cookie
-    const refreshToken = req.cookies.refreshToken;
-
-    if (!refreshToken) {
-      return res.status(400).json({
-        success: false,
-        message: "Refresh token not found",
-      });
-    }
-
-    // find user with this refresh token
-    const user = await UserModel.findOne({
-      "refreshTokens.token": refreshToken,
-    });
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found",
-      });
-    }
-
-    // REMOVE ALL REFRESH TOKENS
-    user.refreshTokens = [];
-
-    // save updated user
-    await user.save();
-
-    // clear cookie
-    res.clearCookie("refreshToken", {
-      httpOnly: true,
-      secure: false, // true in production
-      sameSite: "Strict",
-    });
-
-    // response
-    return res.status(200).json({
-      success: true,
-      message: "Logged out from all devices successfully",
-    });
-  } catch (error) {
     console.log(error);
 
     return res.status(500).json({
@@ -318,28 +269,57 @@ const logoutAllController = async (req, res) => {
   }
 };
 
-const publicController = (req, res) => {
-  try {
-    res.status(200).json({
-      success: true,
-      message: "Welcome to landing page",
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Internal Server Error",
-    });
-  }
-};
 
-const protectedController = (req, res) => {
+
+// ================= LOGOUT =================
+
+const logoutController = async (req, res) => {
   try {
+
+    const refreshToken = req.cookies.refreshToken;
+
+    if (!refreshToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Refresh token not found",
+      });
+    }
+
+    // find user
+    const user = await UserModel.findOne({
+      "refreshTokens.token": refreshToken,
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // remove current token
+    user.refreshTokens = user.refreshTokens.filter(
+      (item) => item.token !== refreshToken
+    );
+
+    await user.save();
+
+    // clear cookie
+    res.clearCookie("refreshToken", {
+      httpOnly: true,
+      secure: false,
+      sameSite: "Strict",
+    });
+
     return res.status(200).json({
       success: true,
-      message: "Protected route accessed",
-      user: req.user,
+      message: "Logout successful",
     });
+
   } catch (error) {
+
+    console.log(error);
+
     return res.status(500).json({
       success: false,
       message: "Internal Server Error",
@@ -347,12 +327,257 @@ const protectedController = (req, res) => {
   }
 };
 
+
+
+// ================= LOGOUT ALL =================
+
+const logoutAllController = async (req, res) => {
+  try {
+
+    const refreshToken = req.cookies.refreshToken;
+
+    if (!refreshToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Refresh token not found",
+      });
+    }
+
+    // find user
+    const user = await UserModel.findOne({
+      "refreshTokens.token": refreshToken,
+    });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // remove all refresh tokens
+    user.refreshTokens = [];
+
+    await user.save();
+
+    // clear cookie
+    res.clearCookie("refreshToken", {
+      httpOnly: true,
+      secure: false,
+      sameSite: "Strict",
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Logged out from all devices",
+    });
+
+  } catch (error) {
+
+    console.log(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+    });
+  }
+};
+
+
+
+// ================= FORGOT PASSWORD =================
+
+const forgotPasswordController = async (req, res) => {
+  try {
+
+    const { email } = req.body;
+
+    // validate email
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: "Email is required",
+      });
+    }
+
+    // find user
+    const user = await UserModel.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // generate otp
+    const otp = Math.floor(
+      100000 + Math.random() * 900000
+    ).toString();
+
+    // save otp
+    user.resetOtp = otp;
+
+    // expiry => 10 mins
+    user.resetOtpExpiry = new Date(
+      Date.now() + 10 * 60 * 1000
+    );
+
+    await user.save();
+
+    // send email
+    await sendMail(
+      email,
+      "Password Reset OTP",
+      `Your OTP is ${otp}`
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "OTP sent successfully",
+    });
+
+  } catch (error) {
+
+    console.log(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+    });
+  }
+};
+
+
+
+// ================= RESET PASSWORD =================
+
+const resetPasswordController = async (req, res) => {
+  try {
+
+    const { email, otp, newPassword } = req.body;
+
+    // validate input
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: "All fields are required",
+      });
+    }
+
+    // find user
+    const user = await UserModel.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    // verify otp
+    if (user.resetOtp !== otp) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid OTP",
+      });
+    }
+
+    // verify otp expiry
+    if (user.resetOtpExpiry < new Date()) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP expired",
+      });
+    }
+
+    // hash new password
+    const hashedPassword = await bcrypt.hash(
+      newPassword,
+      10
+    );
+
+    // update password
+    user.password = hashedPassword;
+
+    // clear otp
+    user.resetOtp = null;
+    user.resetOtpExpiry = null;
+
+    // logout all sessions
+    user.refreshTokens = [];
+
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Password reset successful",
+    });
+
+  } catch (error) {
+
+    console.log(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+    });
+  }
+};
+
+
+
+// ================= PUBLIC =================
+
+const publicController = (req, res) => {
+  try {
+
+    return res.status(200).json({
+      success: true,
+      message: "Welcome to landing page",
+    });
+
+  } catch (error) {
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+    });
+  }
+};
+
+
+
+// ================= PROTECTED =================
+
+const protectedController = (req, res) => {
+  try {
+
+    return res.status(200).json({
+      success: true,
+      message: "Protected route accessed",
+      user: req.user,
+    });
+
+  } catch (error) {
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+    });
+  }
+};
+
+
+
 module.exports = {
   registerController,
   loginController,
   refreshAccessTokenController,
   logoutController,
   logoutAllController,
+  forgotPasswordController,
+  resetPasswordController,
   publicController,
   protectedController,
 };
